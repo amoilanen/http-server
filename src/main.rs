@@ -128,9 +128,10 @@ fn parse_request(input: &str) -> Result<HttpRequest, std::io::Error> {
         .ok_or(Error::new(ErrorKind::Other, format!("Malformed HTTP request: cannot parse request URI: '{}'", request_line)))?);
     let mut headers: Vec<(String, String)> = Vec::new();
     for header_line in lines.iter().skip(1).take_while(|line| !line.is_empty()) {
-        let line_parts = header_line.split(":").collect::<Vec<&str>>();
-        let header = (String::from(*line_parts.get(0).ok_or(Error::new(ErrorKind::Other, format!("Malformed HTTP header: '{}'", header_line)))?), String::from(*line_parts.get(1).ok_or(Error::new(ErrorKind::Other, format!("Malformed HTTP header: '{}'", header_line)))?));
-        headers.push(header)
+        let header_parts = header_line
+          .split_once(":").ok_or(Error::new(ErrorKind::Other, format!("Malformed HTTP header: '{}'", header_line)))?;
+        let header = (String::from(header_parts.0.trim()), String::from(header_parts.1.trim()));
+        headers.push(header);
     }
     let mut body = String::new();
     for body_line in lines.iter().skip(1 + headers.len()) {
@@ -160,6 +161,19 @@ fn handle_request(mut stream: TcpStream) -> Result<(), std::io::Error> {
     } else if uri.starts_with("/echo/") {
         let str_uri_parameter =&uri["/echo/".len()..];
         let body = str_uri_parameter;
+        let headers = vec![
+            (String::from("Content-Type"), String::from("text/plain")),
+            (String::from("Content-Length"), body.len().to_string())
+        ];
+        let response = &HttpResponse::ok(headers, body).as_string();
+        write_to(&mut stream, response)
+    } else if uri == "/user-agent" {
+        let user_agent_from_request_headers = if let Some(user_agent) = request.headers.iter().find(|header| header.0 == "User-Agent") {
+            &user_agent.1
+        } else {
+            "Unknown"
+        };
+        let body = user_agent_from_request_headers;
         let headers = vec![
             (String::from("Content-Type"), String::from("text/plain")),
             (String::from("Content-Length"), body.len().to_string())
