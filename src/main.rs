@@ -5,8 +5,7 @@ use std::io::Write;
 use std::io::BufReader;
 use std::io::{ ErrorKind, Error };
 use std::str::FromStr;
-
-use nom::FindSubstring;
+use std::thread;
 
 #[derive(Debug)]
 enum HttpMethod {
@@ -195,13 +194,15 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(mut _stream) => {
-                println!("accepted new connection");
-                match handle_request(_stream) {
-                    Ok(_) =>
-                        println!("Handled request correctly"),
-                    Err(e) =>
-                        println!("Error while handling a request: {}", e)
-                }
+                thread::spawn(|| {
+                    println!("accepted new connection");
+                    match handle_request(_stream) {
+                        Ok(_) =>
+                            println!("Handled request correctly"),
+                        Err(e) =>
+                            println!("Error while handling a request: {}", e)
+                    }
+                });
             }
             Err(e) => {
                 println!("error: {}", e);
