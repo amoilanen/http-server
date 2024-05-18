@@ -6,6 +6,8 @@ use std::io::BufReader;
 use std::io::{ ErrorKind, Error };
 use std::str::FromStr;
 
+use nom::FindSubstring;
+
 #[derive(Debug)]
 enum HttpMethod {
     GET,
@@ -151,15 +153,22 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, std::io::Error> {
 
 fn handle_request(mut stream: TcpStream) -> Result<(), std::io::Error> {
     let request = read_request(&mut stream)?;
-    match request.uri.as_str() {
-        "/" => {
-            let response = &HttpResponse::ok(Vec::new(), "").as_string();
-            write_to(&mut stream, response)
-        }
-        _ => {
-            let response = &HttpResponse::not_found().as_string();
-            write_to(&mut stream, response)
-        }
+    let uri = request.uri.as_str();
+    if uri == "/" {
+        let response = &HttpResponse::ok(Vec::new(), "").as_string();
+        write_to(&mut stream, response)
+    } else if uri.starts_with("/echo/") {
+        let str_uri_parameter =&uri["/echo/".len()..];
+        let body = str_uri_parameter;
+        let headers = vec![
+            (String::from("Content-Type"), String::from("text/plain")),
+            (String::from("Content-Length"), body.len().to_string())
+        ];
+        let response = &HttpResponse::ok(headers, body).as_string();
+        write_to(&mut stream, response)
+    } else {
+        let response = &HttpResponse::not_found().as_string();
+        write_to(&mut stream, response)
     }
 }
 
