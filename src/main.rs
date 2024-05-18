@@ -74,7 +74,7 @@ impl HttpResponse {
         HttpResponse {
             http_version: String::from("HTTP/1.1"),
             status: 404,
-            reason_phrase: String::from("Not found"),
+            reason_phrase: String::from("Not Found"),
             headers: Vec::new(),
             body: String::from("")
         }
