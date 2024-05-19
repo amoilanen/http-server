@@ -6,6 +6,9 @@ use std::io::BufReader;
 use std::io::{ ErrorKind, Error };
 use std::str::FromStr;
 use std::thread;
+use std::env;
+use std::fs;
+use std::path::Path;
 
 #[derive(Debug)]
 enum HttpMethod {
@@ -54,10 +57,20 @@ struct HttpResponse {
     status: u16,
     reason_phrase: String,
     headers: Vec<(String, String)>,
-    body: String
+    body: Vec<u8>
 }
 
 impl HttpResponse {
+
+    fn ok_with_bytes(headers: Vec<(String, String)>, body: Vec<u8>) -> HttpResponse {
+        HttpResponse {
+            http_version: String::from("HTTP/1.1"),
+            status: 200,
+            reason_phrase: String::from("OK"),
+            headers: headers,
+            body: body
+        }
+    }
 
     fn ok(headers: Vec<(String, String)>, body: &str) -> HttpResponse {
         HttpResponse {
@@ -65,7 +78,7 @@ impl HttpResponse {
             status: 200,
             reason_phrase: String::from("OK"),
             headers: headers,
-            body: String::from(body)
+            body: body.as_bytes().to_vec()
         }
     }
 
@@ -75,16 +88,21 @@ impl HttpResponse {
             status: 404,
             reason_phrase: String::from("Not Found"),
             headers: Vec::new(),
-            body: String::from("")
+            body: Vec::new()
         }
     }
 
-    fn as_string(&self) -> String {
+    fn status_line_and_headers(&self) -> String {
         let mut formatted_headers = String::new();
         for header in self.headers.iter() {
             formatted_headers.push_str(format!("{}: {}\r\n", header.0, header.1).as_str());
         }
-        format!("{} {} {}\r\n{}\r\n{}", self.http_version.as_str(), self.status, self.reason_phrase, formatted_headers.as_str(), self.body)
+        format!("{} {} {}\r\n{}\r\n", self.http_version.as_str(), self.status, self.reason_phrase, formatted_headers.as_str())
+    }
+
+    fn write_to(&self, stream: &mut TcpStream) -> Result<(), std::io::Error> {
+        stream.write_all(self.status_line_and_headers().as_bytes())?;
+        stream.write_all(&self.body)
     }
 }
 
@@ -107,10 +125,6 @@ fn read_from(stream: &mut TcpStream) -> Result<String, std::io::Error> {
         }
     }
     Ok(contents)
-}
-
-fn write_to(stream: &mut TcpStream, contents: &str) -> Result<(), std::io::Error> {
-    stream.write_all(contents.as_bytes())
 }
 
 fn parse_request(input: &str) -> Result<HttpRequest, std::io::Error> {
@@ -151,12 +165,12 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, std::io::Error> {
     parse_request(&contents)
 }
 
-fn handle_request(mut stream: TcpStream) -> Result<(), std::io::Error> {
+fn handle_request(mut stream: TcpStream, server_configuration: &ServerConfiguration) -> Result<(), std::io::Error> {
     let request = read_request(&mut stream)?;
     let uri = request.uri.as_str();
     if uri == "/" {
-        let response = &HttpResponse::ok(Vec::new(), "").as_string();
-        write_to(&mut stream, response)
+        let response = &HttpResponse::ok(Vec::new(), "");
+        response.write_to(&mut stream)
     } else if uri.starts_with("/echo/") {
         let str_uri_parameter =&uri["/echo/".len()..];
         let body = str_uri_parameter;
@@ -164,8 +178,8 @@ fn handle_request(mut stream: TcpStream) -> Result<(), std::io::Error> {
             (String::from("Content-Type"), String::from("text/plain")),
             (String::from("Content-Length"), body.len().to_string())
         ];
-        let response = &HttpResponse::ok(headers, body).as_string();
-        write_to(&mut stream, response)
+        let response = &HttpResponse::ok(headers, body);
+        response.write_to(&mut stream)
     } else if uri == "/user-agent" {
         let user_agent_from_request_headers = if let Some(user_agent) = request.headers.iter().find(|header| header.0 == "User-Agent") {
             &user_agent.1
@@ -177,26 +191,69 @@ fn handle_request(mut stream: TcpStream) -> Result<(), std::io::Error> {
             (String::from("Content-Type"), String::from("text/plain")),
             (String::from("Content-Length"), body.len().to_string())
         ];
-        let response = &HttpResponse::ok(headers, body).as_string();
-        write_to(&mut stream, response)
+        let response = &HttpResponse::ok(headers, body);
+        response.write_to(&mut stream)
+    } else if uri.starts_with("/files/") {
+        match &server_configuration.directory {
+            Some(directory) => {
+                let file_name =&uri["/files/".len()..];
+                let file_path = directory.clone() + "/" + file_name;
+                if Path::new(&file_path).exists() {
+                    let file_bytes: Vec<u8> = fs::read(file_path)?;
+                    let headers = vec![
+                        (String::from("Content-Type"), String::from("application/octet-stream")),
+                        (String::from("Content-Length"), file_bytes.len().to_string())
+                    ];
+                    let response = &HttpResponse::ok_with_bytes(headers, file_bytes);
+                    response.write_to(&mut stream)
+                } else {
+                    let response = &HttpResponse::not_found();
+                    response.write_to(&mut stream)
+                }
+            }
+            None => {
+                let response = &HttpResponse::not_found();
+                response.write_to(&mut stream)
+            }
+        }
     } else {
-        let response = &HttpResponse::not_found().as_string();
-        write_to(&mut stream, response)
+        let response = &HttpResponse::not_found();
+        response.write_to(&mut stream)
     }
 }
 
-fn main() {
+#[derive(Debug, Clone)]
+struct ServerConfiguration {
+    directory: Option<String>
+}
+
+fn parse_args() -> Result<ServerConfiguration, std::io::Error> {
+    let mut directory: Option<String> = None;
+    let args = env::args().collect::<Vec<String>>();
+    for (idx, arg) in args.iter().enumerate() {
+        match arg.as_str() {
+            "-d" | "--directory" => directory = args.get(idx + 1).map(|s| String::from(s)),
+            _ => {},
+          }
+    }
+    Ok(ServerConfiguration { directory })
+}
+
+fn main() -> Result<(), std::io::Error> {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     println!("Logs from your program will appear here!");
+    let server_configuration = parse_args()?;
 
+    println!("Server configuration: {:?}", server_configuration);
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
 
     for stream in listener.incoming() {
         match stream {
             Ok(mut _stream) => {
-                thread::spawn(|| {
+                let per_thread_server_configuration = server_configuration.clone();
+                thread::spawn(move || {
                     println!("accepted new connection");
-                    match handle_request(_stream) {
+                    match handle_request(_stream, &per_thread_server_configuration) {
                         Ok(_) =>
                             println!("Handled request correctly"),
                         Err(e) =>
@@ -209,4 +266,5 @@ fn main() {
             }
         }
     }
+    Ok(())
 }
