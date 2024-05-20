@@ -1,0 +1,2 @@
+* Add support for streaming response bodies, i.e. use Stream instead of Vec<u8>
+* Add support for streaming request bodies, i.e. use Stream instead of Vec<u8>

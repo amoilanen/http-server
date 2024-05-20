@@ -49,7 +49,7 @@ struct HttpRequest {
     uri: String,
     http_version: String,
     headers: Vec<(String, String)>,
-    body: String
+    body: Vec<u8>
 }
 
 struct HttpResponse {
@@ -106,39 +106,56 @@ impl HttpResponse {
     }
 }
 
-fn read_from(stream: &mut TcpStream) -> Result<String, std::io::Error> {
+fn read_bytes_from(stream: &mut TcpStream) -> Result<Vec<u8>, std::io::Error> {
+    let mut result = Vec::new();
     const BUFFER_SIZE: usize = 1024;
-    let mut reader = BufReader::new(stream);
-    let mut contents = String::new();
     let mut buffer = [0; BUFFER_SIZE];
-    let mut finished_reading = false;
+    let mut reader = BufReader::new(stream);
 
+    let mut finished_reading = false;
     while !finished_reading {
         let bytes_read = reader.read(&mut buffer)?;
-        if bytes_read == 0 {
+        if bytes_read < BUFFER_SIZE {
             finished_reading = true;
-        } else {
-            contents.push_str(&String::from_utf8_lossy(&buffer[..bytes_read]));
-            if bytes_read < BUFFER_SIZE {
-                finished_reading = true;
-            }
+        }
+        if bytes_read > 0 {
+            result.extend_from_slice(&buffer[..bytes_read]);
         }
     }
-    Ok(contents)
+    Ok(result)
 }
 
-fn parse_request(input: &str) -> Result<HttpRequest, std::io::Error> {
-    let lines = input.split("\r\n").collect::<Vec<&str>>();
+fn find_request_headers_end_index(request_bytes: &Vec<u8>) -> usize {
+    let mut headers_end_index = 0;
+    let mut found_headers_end = false;
+    while !found_headers_end && headers_end_index < request_bytes.len() - 4 {
+        if request_bytes[headers_end_index] == b'\r' && request_bytes[headers_end_index + 1] == b'\n'
+          && request_bytes[headers_end_index + 2] == b'\r' && request_bytes[headers_end_index + 3] == b'\n' {
+            found_headers_end = true;
+        } else {
+            headers_end_index = headers_end_index + 1;
+        }
+    }
+    headers_end_index
+}
+
+fn parse_request(stream: &mut TcpStream) -> Result<HttpRequest, std::io::Error> {
+    let request_bytes = read_bytes_from(stream)?;
+    let headers_end_index = find_request_headers_end_index(&request_bytes);
+
+    let request_before_body: String = String::from_utf8(request_bytes[0..headers_end_index].to_vec())
+        .map_err(|err| Error::new(ErrorKind::Other, format!("Malformed HTTP request: cannot parse request line and headers: '{}'", err)))?;
+    let lines = request_before_body.split("\r\n").collect::<Vec<&str>>();
     let request_line = lines.first()
-        .ok_or(Error::new(ErrorKind::Other, format!("Malformed HTTP request: cannot find request line '{}'", input)))?;
+        .ok_or(Error::new(ErrorKind::Other, format!("Malformed HTTP request: cannot find request line '{}'", request_before_body)))?;
     let request_line_parts: Vec<&str> = request_line.split_whitespace().collect();
     let method_input =  *request_line_parts.get(0)
         .ok_or(Error::new(ErrorKind::Other, format!("Malformed HTTP request: cannot parse HTTP method: '{}'", request_line)))?;
     let method = HttpMethod::from_str(method_input).map_err(|err| Error::new(ErrorKind::Other, format!("Malformed HTTP request: cannot parse HTTP method: '{}'", err)))?;
     let uri =  String::from(*request_line_parts.get(1)
         .ok_or(Error::new(ErrorKind::Other, format!("Malformed HTTP request: cannot parse request URI: '{}'", request_line)))?);
-    let http_version =  String::from(*request_line_parts.get(1)
-        .ok_or(Error::new(ErrorKind::Other, format!("Malformed HTTP request: cannot parse request URI: '{}'", request_line)))?);
+    let http_version =  String::from(*request_line_parts.get(2)
+        .ok_or(Error::new(ErrorKind::Other, format!("Malformed HTTP request: cannot parse request HTTP version: '{}'", request_line)))?);
     let mut headers: Vec<(String, String)> = Vec::new();
     for header_line in lines.iter().skip(1).take_while(|line| !line.is_empty()) {
         let header_parts = header_line
@@ -146,11 +163,8 @@ fn parse_request(input: &str) -> Result<HttpRequest, std::io::Error> {
         let header = (String::from(header_parts.0.trim()), String::from(header_parts.1.trim()));
         headers.push(header);
     }
-    let mut body = String::new();
-    for body_line in lines.iter().skip(1 + headers.len()) {
-        body.push_str(body_line);
-        body.push('\n');
-    }
+
+    let body = request_bytes[(headers_end_index + 4)..].to_vec();
     Ok(HttpRequest {
         method,
         uri,
@@ -161,8 +175,7 @@ fn parse_request(input: &str) -> Result<HttpRequest, std::io::Error> {
 }
 
 fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, std::io::Error> {
-    let contents = read_from(stream)?;
-    parse_request(&contents)
+    parse_request(stream)
 }
 
 fn handle_request(mut stream: TcpStream, server_configuration: &ServerConfiguration) -> Result<(), std::io::Error> {
