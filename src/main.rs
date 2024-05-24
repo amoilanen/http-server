@@ -125,31 +125,9 @@ impl HttpResponse {
 //TODO: Re-factor the implementation. Should body be an Option<Vec<u8>>? Split into several methods.
 fn parse_request(stream: &mut TcpStream) -> Result<HttpRequest, std::io::Error> {
     let mut reader: BufReader<&mut TcpStream> = BufReader::new(stream);
-    let mut request_before_body: String = String::new();
-    let mut current_line = String::new();
-    let mut has_read_everything_before_body = false;
 
-    while !has_read_everything_before_body {
-        match reader.read_line(&mut current_line)? {
-            0 => break,
-            _ => {
-                request_before_body.push_str(&current_line.clone());
-                request_before_body.push_str("\r\n");
-                if request_before_body.ends_with("\r\n\r\n") {
-                    has_read_everything_before_body = true;
-                }
-                current_line.clear();
-            }
-        }
-    }
-
-    if !has_read_everything_before_body {
-        return Err(Error::new(ErrorKind::Other, format!("Malformed HTTP request: cannot parse request line and headers: '{}'", request_before_body)));
-    }
-
-    let lines = request_before_body.split("\r\n").collect::<Vec<&str>>();
-    let request_line = lines.first()
-        .ok_or(Error::new(ErrorKind::Other, format!("Malformed HTTP request: cannot find request line '{}'", request_before_body)))?;
+    let mut request_line = String::new();
+    reader.read_line(&mut request_line)?;
     let request_line_parts: Vec<&str> = request_line.split_whitespace().collect();
     let method_input =  *request_line_parts.get(0)
         .ok_or(Error::new(ErrorKind::Other, format!("Malformed HTTP request: cannot parse HTTP method: '{}'", request_line)))?;
@@ -158,15 +136,26 @@ fn parse_request(stream: &mut TcpStream) -> Result<HttpRequest, std::io::Error> 
         .ok_or(Error::new(ErrorKind::Other, format!("Malformed HTTP request: cannot parse request URI: '{}'", request_line)))?);
     let http_version =  String::from(*request_line_parts.get(2)
         .ok_or(Error::new(ErrorKind::Other, format!("Malformed HTTP request: cannot parse request HTTP version: '{}'", request_line)))?);
+
     let mut headers: Vec<(String, String)> = Vec::new();
-    for header_line in lines.iter().skip(1).take_while(|line| !line.is_empty()) {
-        let header_parts = header_line
-          .split_once(":").ok_or(Error::new(ErrorKind::Other, format!("Malformed HTTP header: '{}'", header_line)))?;
-        let header = (String::from(header_parts.0.trim()), String::from(header_parts.1.trim()));
-        headers.push(header);
+    let mut current_header_line = String::new();
+    loop {
+        match reader.read_line(&mut current_header_line)? {
+            0 => break,
+            _ => {
+                if current_header_line == "\r\n" {
+                    break;
+                } else {
+                    let header_parts = current_header_line
+                        .split_once(":").ok_or(Error::new(ErrorKind::Other, format!("Malformed HTTP header: '{}'", current_header_line)))?;
+                    let header = (String::from(header_parts.0.trim()), String::from(header_parts.1.trim()));
+                    headers.push(header);
+                }
+                current_header_line.clear();
+            }
+        }
     }
 
-    println!("{:?}", headers);
     let content_length_header_value = headers.iter()
         .find(|(header_name, _)| header_name == "Content-Length")
         .map(|(_, header_value)| header_value.as_str()).unwrap_or("0");
@@ -288,11 +277,7 @@ fn main() -> Result<(), std::io::Error> {
     println!("Logs from your program will appear here!");
     let server_configuration = parse_args()?;
 
-    //println!("Server configuration: {:?}", server_configuration);
-
-    let server_configuration = ServerConfiguration {
-        directory: Some(String::from("./temp"))
-    };
+    println!("Server configuration: {:?}", server_configuration);
 
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
 
