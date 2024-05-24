@@ -1,3 +1,5 @@
+use core::panic;
+use std::io::BufRead;
 use std::io::Read;
 use std::net::TcpListener;
 use std::net::TcpStream;
@@ -8,9 +10,12 @@ use std::str::FromStr;
 use std::thread;
 use std::env;
 use std::fs;
+use std::fs::OpenOptions;
 use std::path::Path;
+use std::time::Duration;
+use std::usize;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum HttpMethod {
     GET,
     POST,
@@ -82,6 +87,17 @@ impl HttpResponse {
         }
     }
 
+
+    fn created(headers: Vec<(String, String)>, body: &str) -> HttpResponse {
+        HttpResponse {
+            http_version: String::from("HTTP/1.1"),
+            status: 201,
+            reason_phrase: String::from("OK"),
+            headers: headers,
+            body: body.as_bytes().to_vec()
+        }
+    }
+
     fn not_found() -> HttpResponse {
         HttpResponse {
             http_version: String::from("HTTP/1.1"),
@@ -106,45 +122,31 @@ impl HttpResponse {
     }
 }
 
-fn read_bytes_from(stream: &mut TcpStream) -> Result<Vec<u8>, std::io::Error> {
-    let mut result = Vec::new();
-    const BUFFER_SIZE: usize = 1024;
-    let mut buffer = [0; BUFFER_SIZE];
-    let mut reader = BufReader::new(stream);
-
-    let mut finished_reading = false;
-    while !finished_reading {
-        let bytes_read = reader.read(&mut buffer)?;
-        if bytes_read < BUFFER_SIZE {
-            finished_reading = true;
-        }
-        if bytes_read > 0 {
-            result.extend_from_slice(&buffer[..bytes_read]);
-        }
-    }
-    Ok(result)
-}
-
-fn find_request_headers_end_index(request_bytes: &Vec<u8>) -> usize {
-    let mut headers_end_index = 0;
-    let mut found_headers_end = false;
-    while !found_headers_end && headers_end_index < request_bytes.len() - 4 {
-        if request_bytes[headers_end_index] == b'\r' && request_bytes[headers_end_index + 1] == b'\n'
-          && request_bytes[headers_end_index + 2] == b'\r' && request_bytes[headers_end_index + 3] == b'\n' {
-            found_headers_end = true;
-        } else {
-            headers_end_index = headers_end_index + 1;
-        }
-    }
-    headers_end_index
-}
-
+//TODO: Re-factor the implementation. Should body be an Option<Vec<u8>>? Split into several methods.
 fn parse_request(stream: &mut TcpStream) -> Result<HttpRequest, std::io::Error> {
-    let request_bytes = read_bytes_from(stream)?;
-    let headers_end_index = find_request_headers_end_index(&request_bytes);
+    let mut reader: BufReader<&mut TcpStream> = BufReader::new(stream);
+    let mut request_before_body: String = String::new();
+    let mut current_line = String::new();
+    let mut has_read_everything_before_body = false;
 
-    let request_before_body: String = String::from_utf8(request_bytes[0..headers_end_index].to_vec())
-        .map_err(|err| Error::new(ErrorKind::Other, format!("Malformed HTTP request: cannot parse request line and headers: '{}'", err)))?;
+    while !has_read_everything_before_body {
+        match reader.read_line(&mut current_line)? {
+            0 => break,
+            _ => {
+                request_before_body.push_str(&current_line.clone());
+                request_before_body.push_str("\r\n");
+                if request_before_body.ends_with("\r\n\r\n") {
+                    has_read_everything_before_body = true;
+                }
+                current_line.clear();
+            }
+        }
+    }
+
+    if !has_read_everything_before_body {
+        return Err(Error::new(ErrorKind::Other, format!("Malformed HTTP request: cannot parse request line and headers: '{}'", request_before_body)));
+    }
+
     let lines = request_before_body.split("\r\n").collect::<Vec<&str>>();
     let request_line = lines.first()
         .ok_or(Error::new(ErrorKind::Other, format!("Malformed HTTP request: cannot find request line '{}'", request_before_body)))?;
@@ -164,7 +166,15 @@ fn parse_request(stream: &mut TcpStream) -> Result<HttpRequest, std::io::Error> 
         headers.push(header);
     }
 
-    let body = request_bytes[(headers_end_index + 4)..].to_vec();
+    println!("{:?}", headers);
+    let content_length_header_value = headers.iter()
+        .find(|(header_name, _)| header_name == "Content-Length")
+        .map(|(_, header_value)| header_value.as_str()).unwrap_or("0");
+    let content_length = content_length_header_value.parse::<usize>()
+        .or_else(|_| Err(Error::new(ErrorKind::Other, format!("Could not parse Content-Length header value '{}'", content_length_header_value))))?;
+    let mut body: Vec<u8> = vec![0; content_length];
+    reader.read_exact(&mut body)?;
+
     Ok(HttpRequest {
         method,
         uri,
@@ -209,15 +219,36 @@ fn handle_request(mut stream: TcpStream, server_configuration: &ServerConfigurat
     } else if uri.starts_with("/files/") {
         match &server_configuration.directory {
             Some(directory) => {
-                let file_name =&uri["/files/".len()..];
-                let file_path = directory.clone() + "/" + file_name;
-                if Path::new(&file_path).exists() {
-                    let file_bytes: Vec<u8> = fs::read(file_path)?;
+                if request.method == HttpMethod::GET {
+                  let file_name =&uri["/files/".len()..];
+                  let file_path = directory.clone() + "/" + file_name;
+                  if Path::new(&file_path).exists() {
+                      let file_bytes: Vec<u8> = fs::read(file_path)?;
+                      let headers = vec![
+                          (String::from("Content-Type"), String::from("application/octet-stream")),
+                          (String::from("Content-Length"), file_bytes.len().to_string())
+                      ];
+                      let response = &HttpResponse::ok_with_bytes(headers, file_bytes);
+                      response.write_to(&mut stream)
+                  } else {
+                      let response = &HttpResponse::not_found();
+                      response.write_to(&mut stream)
+                  }
+                } else if request.method == HttpMethod::POST {
+                    let file_name =&uri["/files/".len()..];
+                    let file_path = directory.clone() + "/" + file_name;
+                    let mut file = OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .open(file_path)?;
+                    println!("Length of request body = {}", request.body.len());
+                    file.write_all(&request.body)?;
+                    let body = "Uploaded successfully";
                     let headers = vec![
-                        (String::from("Content-Type"), String::from("application/octet-stream")),
-                        (String::from("Content-Length"), file_bytes.len().to_string())
+                        (String::from("Content-Type"), String::from("text/plain")),
+                        (String::from("Content-Length"), body.len().to_string())
                     ];
-                    let response = &HttpResponse::ok_with_bytes(headers, file_bytes);
+                    let response = &HttpResponse::created(headers, &body);
                     response.write_to(&mut stream)
                 } else {
                     let response = &HttpResponse::not_found();
@@ -257,7 +288,12 @@ fn main() -> Result<(), std::io::Error> {
     println!("Logs from your program will appear here!");
     let server_configuration = parse_args()?;
 
-    println!("Server configuration: {:?}", server_configuration);
+    //println!("Server configuration: {:?}", server_configuration);
+
+    let server_configuration = ServerConfiguration {
+        directory: Some(String::from("./temp"))
+    };
+
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
 
     for stream in listener.incoming() {
