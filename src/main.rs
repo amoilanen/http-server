@@ -92,7 +92,7 @@ impl HttpResponse {
         HttpResponse {
             http_version: String::from("HTTP/1.1"),
             status: 201,
-            reason_phrase: String::from("OK"),
+            reason_phrase: String::from("Created"),
             headers: headers,
             body: body.as_bytes().to_vec()
         }
