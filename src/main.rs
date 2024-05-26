@@ -1,4 +1,3 @@
-use core::panic;
 use std::io::BufRead;
 use std::io::Read;
 use std::net::TcpListener;
@@ -12,8 +11,8 @@ use std::env;
 use std::fs;
 use std::fs::OpenOptions;
 use std::path::Path;
-use std::time::Duration;
 use std::usize;
+use flate2::write::GzEncoder;
 
 use itertools::Itertools;
 
@@ -225,6 +224,14 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, std::io::Error> {
     parse_request(stream)
 }
 
+fn gzip_compress(bytes: Vec<u8>) -> Result<Vec<u8>,std::io::Error> {
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut encoder = GzEncoder::new(&mut buffer, flate2::Compression::default());
+    encoder.write_all(&bytes)?;
+    encoder.finish()?;
+    Ok(buffer)
+}
+
 fn handle_request(mut stream: TcpStream, server_configuration: &ServerConfiguration) -> Result<(), std::io::Error> {
     let request = read_request(&mut stream)?;
     let uri = request.uri.as_str();
@@ -233,18 +240,19 @@ fn handle_request(mut stream: TcpStream, server_configuration: &ServerConfigurat
         response.write_to(&mut stream)
     } else if uri.starts_with("/echo/") {
         let str_uri_parameter =&uri["/echo/".len()..];
-        let body = str_uri_parameter;
+        let mut body = str_uri_parameter.as_bytes().to_vec();
         let mut headers = HttpHeaders::new(vec![
-            (String::from("Content-Type"), String::from("text/plain")),
-            (String::from("Content-Length"), body.len().to_string())
+            (String::from("Content-Type"), String::from("text/plain"))
         ]);
         if let Some(accepted_encodings) = request.headers.get("Accept-Encoding") {
             let encodings: Vec<&str> = accepted_encodings.split(",").map(|encoding| encoding.trim()).collect();
             if encodings.iter().contains(&"gzip") {
                 (&mut headers).append(String::from("Content-Encoding"), String::from("gzip"));
+                body = gzip_compress(body)?
             }
         }
-        let response = &HttpResponse::ok(headers, body);
+        (&mut headers).append( String::from("Content-Length"), body.len().to_string());
+        let response = &HttpResponse::ok_with_bytes(headers, body);
         response.write_to(&mut stream)
     } else if uri == "/user-agent" {
         let user_agent_from_request_headers = if let Some(user_agent) = request.headers.name_value_pairs.iter().find(|header| header.0 == "User-Agent") {
