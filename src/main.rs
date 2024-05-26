@@ -15,6 +15,8 @@ use std::path::Path;
 use std::time::Duration;
 use std::usize;
 
+use itertools::Itertools;
+
 #[derive(Debug, PartialEq)]
 enum HttpMethod {
     GET,
@@ -236,8 +238,11 @@ fn handle_request(mut stream: TcpStream, server_configuration: &ServerConfigurat
             (String::from("Content-Type"), String::from("text/plain")),
             (String::from("Content-Length"), body.len().to_string())
         ]);
-        if request.headers.get("Accept-Encoding") == Some("gzip") {
-            (&mut headers).append(String::from("Content-Encoding"), String::from("gzip"));
+        if let Some(accepted_encodings) = request.headers.get("Accept-Encoding") {
+            let encodings: Vec<&str> = accepted_encodings.split(",").map(|encoding| encoding.trim()).collect();
+            if encodings.iter().contains(&"gzip") {
+                (&mut headers).append(String::from("Content-Encoding"), String::from("gzip"));
+            }
         }
         let response = &HttpResponse::ok(headers, body);
         response.write_to(&mut stream)
