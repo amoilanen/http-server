@@ -53,47 +53,69 @@ struct HttpRequest {
     method: HttpMethod,
     uri: String,
     http_version: String,
-    headers: Vec<(String, String)>,
+    headers: HttpHeaders,
     body: Vec<u8>
+}
+
+struct RequestLine {
+    method: HttpMethod,
+    uri: String,
+    http_version: String,
+}
+
+#[derive(Debug)]
+struct HttpHeaders {
+    name_value_pairs: Vec<(String, String)>
+}
+
+impl HttpHeaders {
+    fn new(name_value_pairs: Vec<(String, String)>) -> HttpHeaders {
+        HttpHeaders {
+            name_value_pairs
+        }
+    }
+
+    fn empty() -> HttpHeaders {
+        HttpHeaders::new(Vec::new())
+    }
 }
 
 struct HttpResponse {
     http_version: String,
     status: u16,
     reason_phrase: String,
-    headers: Vec<(String, String)>,
+    headers: HttpHeaders,
     body: Vec<u8>
 }
 
 impl HttpResponse {
 
-    fn ok_with_bytes(headers: Vec<(String, String)>, body: Vec<u8>) -> HttpResponse {
+    fn ok_with_bytes(headers: HttpHeaders, body: Vec<u8>) -> HttpResponse {
         HttpResponse {
             http_version: String::from("HTTP/1.1"),
             status: 200,
             reason_phrase: String::from("OK"),
-            headers: headers,
-            body: body
+            headers,
+            body
         }
     }
 
-    fn ok(headers: Vec<(String, String)>, body: &str) -> HttpResponse {
+    fn ok(headers: HttpHeaders, body: &str) -> HttpResponse {
         HttpResponse {
             http_version: String::from("HTTP/1.1"),
             status: 200,
             reason_phrase: String::from("OK"),
-            headers: headers,
+            headers,
             body: body.as_bytes().to_vec()
         }
     }
 
-
-    fn created(headers: Vec<(String, String)>, body: &str) -> HttpResponse {
+    fn created(headers: HttpHeaders, body: &str) -> HttpResponse {
         HttpResponse {
             http_version: String::from("HTTP/1.1"),
             status: 201,
             reason_phrase: String::from("Created"),
-            headers: headers,
+            headers,
             body: body.as_bytes().to_vec()
         }
     }
@@ -103,29 +125,26 @@ impl HttpResponse {
             http_version: String::from("HTTP/1.1"),
             status: 404,
             reason_phrase: String::from("Not Found"),
-            headers: Vec::new(),
+            headers: HttpHeaders::empty(),
             body: Vec::new()
         }
     }
 
-    fn status_line_and_headers(&self) -> String {
+    fn format_status_line_and_headers(&self) -> String {
         let mut formatted_headers = String::new();
-        for header in self.headers.iter() {
+        for header in self.headers.name_value_pairs.iter() {
             formatted_headers.push_str(format!("{}: {}\r\n", header.0, header.1).as_str());
         }
         format!("{} {} {}\r\n{}\r\n", self.http_version.as_str(), self.status, self.reason_phrase, formatted_headers.as_str())
     }
 
     fn write_to(&self, stream: &mut TcpStream) -> Result<(), std::io::Error> {
-        stream.write_all(self.status_line_and_headers().as_bytes())?;
+        stream.write_all(self.format_status_line_and_headers().as_bytes())?;
         stream.write_all(&self.body)
     }
 }
 
-//TODO: Re-factor the implementation. Should body be an Option<Vec<u8>>? Split into several methods.
-fn parse_request(stream: &mut TcpStream) -> Result<HttpRequest, std::io::Error> {
-    let mut reader: BufReader<&mut TcpStream> = BufReader::new(stream);
-
+fn parse_request_line(reader: &mut BufReader<&mut TcpStream>) -> Result<RequestLine, std::io::Error> {
     let mut request_line = String::new();
     reader.read_line(&mut request_line)?;
     let request_line_parts: Vec<&str> = request_line.split_whitespace().collect();
@@ -136,8 +155,15 @@ fn parse_request(stream: &mut TcpStream) -> Result<HttpRequest, std::io::Error> 
         .ok_or(Error::new(ErrorKind::Other, format!("Malformed HTTP request: cannot parse request URI: '{}'", request_line)))?);
     let http_version =  String::from(*request_line_parts.get(2)
         .ok_or(Error::new(ErrorKind::Other, format!("Malformed HTTP request: cannot parse request HTTP version: '{}'", request_line)))?);
+    Ok(RequestLine {
+        method,
+        uri,
+        http_version
+    })
+}
 
-    let mut headers: Vec<(String, String)> = Vec::new();
+fn parse_http_headers(reader: &mut BufReader<&mut TcpStream>) -> Result<HttpHeaders, std::io::Error> {
+    let mut name_value_pairs: Vec<(String, String)> = Vec::new();
     let mut current_header_line = String::new();
     loop {
         match reader.read_line(&mut current_header_line)? {
@@ -149,26 +175,38 @@ fn parse_request(stream: &mut TcpStream) -> Result<HttpRequest, std::io::Error> 
                     let header_parts = current_header_line
                         .split_once(":").ok_or(Error::new(ErrorKind::Other, format!("Malformed HTTP header: '{}'", current_header_line)))?;
                     let header = (String::from(header_parts.0.trim()), String::from(header_parts.1.trim()));
-                    headers.push(header);
+                    name_value_pairs.push(header);
                 }
                 current_header_line.clear();
             }
         }
     }
+    Ok(HttpHeaders::new(name_value_pairs))
+}
 
-    let content_length_header_value = headers.iter()
+fn get_content_length_from_headers(http_headers: &HttpHeaders) -> Result<usize, std::io::Error> {
+    let content_length_header_value = http_headers.name_value_pairs.iter()
         .find(|(header_name, _)| header_name == "Content-Length")
         .map(|(_, header_value)| header_value.as_str()).unwrap_or("0");
     let content_length = content_length_header_value.parse::<usize>()
         .or_else(|_| Err(Error::new(ErrorKind::Other, format!("Could not parse Content-Length header value '{}'", content_length_header_value))))?;
+    Ok(content_length)
+}
+
+fn parse_request(stream: &mut TcpStream) -> Result<HttpRequest, std::io::Error> {
+    let mut reader: BufReader<&mut TcpStream> = BufReader::new(stream);
+
+    let request_line = parse_request_line(&mut reader)?;
+    let http_headers = parse_http_headers(&mut reader)?;
+    let content_length = get_content_length_from_headers(&http_headers)?;
     let mut body: Vec<u8> = vec![0; content_length];
     reader.read_exact(&mut body)?;
 
     Ok(HttpRequest {
-        method,
-        uri,
-        http_version,
-        headers,
+        method: request_line.method,
+        uri: request_line.uri,
+        http_version: request_line.http_version,
+        headers: http_headers,
         body
     })
 }
@@ -181,28 +219,28 @@ fn handle_request(mut stream: TcpStream, server_configuration: &ServerConfigurat
     let request = read_request(&mut stream)?;
     let uri = request.uri.as_str();
     if uri == "/" {
-        let response = &HttpResponse::ok(Vec::new(), "");
+        let response = &HttpResponse::ok(HttpHeaders::empty(), "");
         response.write_to(&mut stream)
     } else if uri.starts_with("/echo/") {
         let str_uri_parameter =&uri["/echo/".len()..];
         let body = str_uri_parameter;
-        let headers = vec![
+        let headers = HttpHeaders::new(vec![
             (String::from("Content-Type"), String::from("text/plain")),
             (String::from("Content-Length"), body.len().to_string())
-        ];
+        ]);
         let response = &HttpResponse::ok(headers, body);
         response.write_to(&mut stream)
     } else if uri == "/user-agent" {
-        let user_agent_from_request_headers = if let Some(user_agent) = request.headers.iter().find(|header| header.0 == "User-Agent") {
+        let user_agent_from_request_headers = if let Some(user_agent) = request.headers.name_value_pairs.iter().find(|header| header.0 == "User-Agent") {
             &user_agent.1
         } else {
             "Unknown"
         };
         let body = user_agent_from_request_headers;
-        let headers = vec![
+        let headers = HttpHeaders::new(vec![
             (String::from("Content-Type"), String::from("text/plain")),
             (String::from("Content-Length"), body.len().to_string())
-        ];
+        ]);
         let response = &HttpResponse::ok(headers, body);
         response.write_to(&mut stream)
     } else if uri.starts_with("/files/") {
@@ -213,10 +251,10 @@ fn handle_request(mut stream: TcpStream, server_configuration: &ServerConfigurat
                   let file_path = directory.clone() + "/" + file_name;
                   if Path::new(&file_path).exists() {
                       let file_bytes: Vec<u8> = fs::read(file_path)?;
-                      let headers = vec![
+                      let headers = HttpHeaders::new(vec![
                           (String::from("Content-Type"), String::from("application/octet-stream")),
                           (String::from("Content-Length"), file_bytes.len().to_string())
-                      ];
+                      ]);
                       let response = &HttpResponse::ok_with_bytes(headers, file_bytes);
                       response.write_to(&mut stream)
                   } else {
@@ -233,10 +271,10 @@ fn handle_request(mut stream: TcpStream, server_configuration: &ServerConfigurat
                     println!("Length of request body = {}", request.body.len());
                     file.write_all(&request.body)?;
                     let body = "Uploaded successfully";
-                    let headers = vec![
+                    let headers = HttpHeaders::new(vec![
                         (String::from("Content-Type"), String::from("text/plain")),
                         (String::from("Content-Length"), body.len().to_string())
-                    ];
+                    ]);
                     let response = &HttpResponse::created(headers, &body);
                     response.write_to(&mut stream)
                 } else {
