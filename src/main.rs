@@ -75,6 +75,14 @@ impl HttpHeaders {
         }
     }
 
+    fn get(&self, name: &str) -> Option<&str> {
+        self.name_value_pairs.iter().find(|(header_name, _)| header_name == name).map(|(_, header_value)| header_value.as_str())
+    }
+
+    fn append(&mut self, name: String, value: String) {
+        self.name_value_pairs.push((name, value));
+    }
+
     fn empty() -> HttpHeaders {
         HttpHeaders::new(Vec::new())
     }
@@ -224,10 +232,13 @@ fn handle_request(mut stream: TcpStream, server_configuration: &ServerConfigurat
     } else if uri.starts_with("/echo/") {
         let str_uri_parameter =&uri["/echo/".len()..];
         let body = str_uri_parameter;
-        let headers = HttpHeaders::new(vec![
+        let mut headers = HttpHeaders::new(vec![
             (String::from("Content-Type"), String::from("text/plain")),
             (String::from("Content-Length"), body.len().to_string())
         ]);
+        if request.headers.get("Accept-Encoding") == Some("gzip") {
+            (&mut headers).append(String::from("Content-Encoding"), String::from("gzip"));
+        }
         let response = &HttpResponse::ok(headers, body);
         response.write_to(&mut stream)
     } else if uri == "/user-agent" {
