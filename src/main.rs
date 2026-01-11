@@ -11,9 +11,7 @@ use http::parse_request;
 use config::parse_args;
 use handlers::Router;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Logs from your program will appear here!");
-
+fn main() -> anyhow::Result<()> {
     let server_config = parse_args()?;
     println!("Server configuration: {:?}", server_config);
 
@@ -44,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn handle_connection(
     stream: &mut std::net::TcpStream,
     router: &handlers::Router,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> anyhow::Result<()> {
     let request = parse_request(stream)?;
     let response = router.handle(request);
     stream.write_all(&response.to_bytes())?;

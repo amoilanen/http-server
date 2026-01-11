@@ -1,4 +1,5 @@
 use std::env;
+use anyhow::Result;
 
 /// Server configuration parsed from command-line arguments
 #[derive(Debug, Clone)]
@@ -15,7 +16,7 @@ impl ServerConfig {
 }
 
 /// Parse command-line arguments into ServerConfig
-pub fn parse_args() -> Result<ServerConfig, String> {
+pub fn parse_args() -> Result<ServerConfig> {
     let mut directory: Option<String> = None;
     let args: Vec<String> = env::args().collect();
 
@@ -27,7 +28,7 @@ pub fn parse_args() -> Result<ServerConfig, String> {
                     directory = Some(args[i + 1].clone());
                     i += 2;
                 } else {
-                    return Err("--directory flag requires a value".to_string());
+                    anyhow::bail!("--directory flag requires a value");
                 }
             }
             _ => {

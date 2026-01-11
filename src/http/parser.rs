@@ -1,22 +1,20 @@
-use std::io::{BufRead, BufReader, Error, ErrorKind, Read};
+use std::io::{BufRead, BufReader, Read};
 use std::net::TcpStream;
 use std::str::FromStr;
 
+use anyhow::{anyhow, Result};
 use crate::http::types::{HttpMethod, HttpRequest, HttpHeaders};
 
 /// Parse a single HTTP request line
-fn parse_request_line(line: &str) -> Result<(HttpMethod, String, String), Error> {
+fn parse_request_line(line: &str) -> Result<(HttpMethod, String, String)> {
     let parts: Vec<&str> = line.split_whitespace().collect();
 
     if parts.len() < 3 {
-        return Err(Error::new(
-            ErrorKind::InvalidData,
-            format!("Malformed HTTP request line: '{}'", line),
-        ));
+        return Err(anyhow!("Malformed HTTP request line: '{}'", line));
     }
 
     let method = HttpMethod::from_str(parts[0])
-        .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        .map_err(|e| anyhow!("Invalid HTTP method: {}", e))?;
 
     let uri = parts[1].to_string();
     let http_version = parts[2].to_string();
@@ -25,7 +23,7 @@ fn parse_request_line(line: &str) -> Result<(HttpMethod, String, String), Error>
 }
 
 /// Parse HTTP headers from a buffered reader
-fn parse_headers(reader: &mut BufReader<&mut TcpStream>) -> Result<HttpHeaders, Error> {
+fn parse_headers(reader: &mut BufReader<&mut TcpStream>) -> Result<HttpHeaders> {
     let mut headers = HttpHeaders::new();
     let mut line = String::new();
 
@@ -39,10 +37,7 @@ fn parse_headers(reader: &mut BufReader<&mut TcpStream>) -> Result<HttpHeaders, 
 
         let (key, value) = line
             .split_once(':')
-            .ok_or_else(|| Error::new(
-                ErrorKind::InvalidData,
-                format!("Malformed HTTP header: '{}'", line),
-            ))?;
+            .ok_or_else(|| anyhow!("Malformed HTTP header: '{}'", line))?;
 
         headers.insert(key.trim().to_string(), value.trim().to_string());
     }
@@ -51,20 +46,16 @@ fn parse_headers(reader: &mut BufReader<&mut TcpStream>) -> Result<HttpHeaders, 
 }
 
 /// Get the Content-Length from headers, defaults to 0 if not present
-fn get_content_length(headers: &HttpHeaders) -> Result<usize, Error> {
+fn get_content_length(headers: &HttpHeaders) -> Result<usize> {
     match headers.get("Content-Length") {
-        Some(value) => value.parse::<usize>().map_err(|_| {
-            Error::new(
-                ErrorKind::InvalidData,
-                format!("Invalid Content-Length value: '{}'", value),
-            )
-        }),
+        Some(value) => value.parse::<usize>()
+            .map_err(|_| anyhow!("Invalid Content-Length value: '{}'", value)),
         None => Ok(0),
     }
 }
 
 /// Parse a complete HTTP request from a TCP stream
-pub fn parse_request(stream: &mut TcpStream) -> Result<HttpRequest, Error> {
+pub fn parse_request(stream: &mut TcpStream) -> Result<HttpRequest> {
     let mut reader = BufReader::new(stream);
 
     // Parse request line
