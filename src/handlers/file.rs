@@ -1,4 +1,4 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 
@@ -43,7 +43,7 @@ fn handle_get_file(directory: &str, file_name: &str) -> HttpResponse {
 fn handle_post_file(directory: &str, file_name: &str, request: &HttpRequest) -> HttpResponse {
     let file_path = format!("{}/{}", directory, file_name);
 
-    match std::fs::OpenOptions::new()
+    match OpenOptions::new()
         .create(true)
         .write(true)
         .open(&file_path)

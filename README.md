@@ -62,6 +62,24 @@ cargo run
 
 The server will start on `127.0.0.1:4221`
 
+### Logging
+
+This project uses the Rust standard `log` crate with `env_logger` for logging. Control logging level via the `RUST_LOG` environment variable:
+
+```sh
+# Show info and error messages
+RUST_LOG=info cargo run
+
+# Show debug information (very verbose)
+RUST_LOG=debug cargo run
+
+# Show only errors
+RUST_LOG=error cargo run
+
+# Show logs from specific modules
+RUST_LOG=codecrafters_http_server::handlers=debug cargo run
+```
+
 ### With File Directory
 
 ```sh

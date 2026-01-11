@@ -1,10 +1,12 @@
+use std::io::{Result as IoResult, Write};
+
 use flate2::write::GzEncoder;
-use std::io::Write;
+use flate2::Compression;
 
 /// Compress data using gzip
-pub fn gzip_encode(data: &[u8]) -> std::io::Result<Vec<u8>> {
+pub fn gzip_encode(data: &[u8]) -> IoResult<Vec<u8>> {
     let mut buffer = Vec::new();
-    let mut encoder = GzEncoder::new(&mut buffer, flate2::Compression::default());
+    let mut encoder = GzEncoder::new(&mut buffer, Compression::default());
     encoder.write_all(data)?;
     encoder.finish()?;
     Ok(buffer)
