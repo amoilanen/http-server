@@ -1,5 +1,6 @@
 // Library root - exposes public API for integration tests
 
+pub mod args;
 pub mod http;
 pub mod compression;
 pub mod config;

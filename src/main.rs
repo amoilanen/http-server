@@ -4,6 +4,7 @@ use std::thread;
 
 use anyhow::Result;
 
+mod args;
 mod http;
 mod compression;
 mod config;
