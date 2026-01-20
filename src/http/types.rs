@@ -151,13 +151,17 @@ impl HttpResponse {
     }
 
     /// Format the status line and headers as bytes
-    pub fn format_headers(&self) -> Vec<u8> {
+    pub fn serialize(&self) -> Vec<u8> {
         let mut result = format!(
             "{} {} {}\r\n",
             self.http_version, self.status, self.reason_phrase
         );
 
-        for (key, value) in self.headers.iter() {
+        // Sort headers for deterministic output
+        let mut headers: Vec<_> = self.headers.iter().collect();
+        headers.sort_by(|a, b| a.0.cmp(b.0));
+
+        for (key, value) in headers {
             result.push_str(&format!("{}: {}\r\n", key, value));
         }
 
@@ -167,7 +171,7 @@ impl HttpResponse {
 
     /// Combine headers and body into complete response
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut response = self.format_headers();
+        let mut response = self.serialize();
         response.extend_from_slice(&self.body);
         response
     }
@@ -219,18 +223,18 @@ mod tests {
         let mut headers = HttpHeaders::new();
         headers.insert("Content-Type", "text/plain");
         headers.insert("Content-Length", "5");
-        
+
         let response = HttpResponse::ok(headers, b"Hello".to_vec());
         let bytes = response.to_bytes();
-        let response_str = String::from_utf8_lossy(&bytes);
-        
-        // Verify essential parts of response
-        assert!(response_str.starts_with("HTTP/1.1 200 OK\r\n"));
-        // Headers should be present (case may vary due to HashMap)
-        let lower = response_str.to_lowercase();
-        assert!(lower.contains("content-type: text/plain\r\n"));
-        assert!(lower.contains("content-length: 5\r\n"));
-        assert!(response_str.ends_with("\r\nHello"));
+
+        // Assert exact serialization (headers are sorted alphabetically)
+        let expected = b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\ncontent-type: text/plain\r\n\r\nHello";
+
+        assert_eq!(
+            bytes, expected,
+            "Response does not match expected format. Got:\n{}",
+            String::from_utf8_lossy(&bytes)
+        );
     }
 }
 

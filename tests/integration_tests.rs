@@ -303,7 +303,7 @@ fn test_response_headers_included() {
     let response = router.handle(request);
 
     // Check response can be formatted properly
-    let formatted = response.format_headers();
+    let formatted = response.serialize();
     let formatted_str = String::from_utf8_lossy(&formatted);
 
     assert!(formatted_str.starts_with("HTTP/1.1 200 OK\r\n"));

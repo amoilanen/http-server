@@ -1,6 +1,5 @@
 use std::io::{BufRead, BufReader, Read};
 use std::net::TcpStream;
-use std::str::FromStr;
 
 use anyhow::{anyhow, Result};
 use crate::http::types::{HttpMethod, HttpRequest, HttpHeaders};
