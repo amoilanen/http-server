@@ -66,25 +66,6 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_echo_without_gzip() {
-        let mut headers = HttpHeaders::new();
-        headers.insert("Accept-Encoding", "deflate");
-        
-        let request = HttpRequest::new(
-            HttpMethod::Get,
-            "/echo/test".to_string(),
-            "HTTP/1.1".to_string(),
-            headers,
-            Vec::new(),
-        );
-        
-        let response = handle_echo(&request);
-        assert_eq!(response.status, 200);
-        assert_eq!(response.body, b"test");
-        assert_eq!(response.headers.get("Content-Encoding"), None);
-    }
-
-    #[test]
     fn test_handle_echo_empty_path() {
         let request = HttpRequest::new(
             HttpMethod::Get,

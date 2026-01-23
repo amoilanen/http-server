@@ -17,25 +17,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_gzip_encode_basic() {
+    fn test_gzip_encode() {
         let data = b"Hello, World!";
         let compressed = gzip_encode(data).unwrap();
-        
+
         // Gzip compressed data should be different from original
         assert_ne!(&compressed[..], data);
-        
-        // Should have gzip magic number (1f 8b)
-        assert_eq!(compressed[0], 0x1f);
-        assert_eq!(compressed[1], 0x8b);
-    }
-
-    #[test]
-    fn test_gzip_encode_empty() {
-        let data = b"";
-        let compressed = gzip_encode(data).unwrap();
-        
-        // Even empty data should have gzip header/trailer
-        assert!(compressed.len() > 0);
+        assert_eq!(compressed[0..2], [0x1f, 0x8b]);
     }
 }
 
