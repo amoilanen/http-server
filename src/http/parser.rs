@@ -111,7 +111,7 @@ mod tests {
     #[test]
     fn test_parse_request_line_valid() -> Result<()> {
         with_reader(b"GET /index.html HTTP/1.1\r\n", |reader| {
-            let (method, uri, version) = parse_request_line(reader)?.unwrap();
+            let (method, uri, version) = parse_request_line(reader)?.expect("expected request line");
             assert_eq!(method, HttpMethod::Get);
             assert_eq!(uri, "/index.html");
             assert_eq!(version, "HTTP/1.1");
@@ -122,7 +122,7 @@ mod tests {
     #[test]
     fn test_parse_request_line_post() -> Result<()> {
         with_reader(b"POST /api HTTP/1.1\r\n", |reader| {
-            let (method, uri, version) = parse_request_line(reader)?.unwrap();
+            let (method, uri, version) = parse_request_line(reader)?.expect("expected request line");
             assert_eq!(method, HttpMethod::Post);
             assert_eq!(uri, "/api");
             assert_eq!(version, "HTTP/1.1");
@@ -205,7 +205,7 @@ mod tests {
         let request_data = b"GET /path HTTP/1.1\r\nHost: example.com\r\n\r\n";
 
         with_reader(request_data, |reader| {
-            let (method, uri, version) = parse_request_line(reader)?.unwrap();
+            let (method, uri, version) = parse_request_line(reader)?.expect("expected request line");
             let headers = parse_headers(reader)?;
             let body = parse_body(reader, &headers)?;
 
@@ -230,7 +230,7 @@ mod tests {
         request_bytes.extend_from_slice(body_content);
 
         with_reader(&request_bytes, |reader| {
-            let (method, uri, _version) = parse_request_line(reader)?.unwrap();
+            let (method, uri, _version) = parse_request_line(reader)?.expect("expected request line");
             let headers = parse_headers(reader)?;
             let body = parse_body(reader, &headers)?;
 
@@ -248,7 +248,7 @@ mod tests {
         let request_data = b"GET /index HTTP/1.1\r\nHost: example.com\r\nUser-Agent: test-client\r\n\r\n";
 
         with_reader(request_data, |reader| {
-            let (method, _uri, _version) = parse_request_line(reader)?.unwrap();
+            let (method, _uri, _version) = parse_request_line(reader)?.expect("expected request line");
             let headers = parse_headers(reader)?;
             let body = parse_body(reader, &headers)?;
 
@@ -263,7 +263,7 @@ mod tests {
         let request_data = b"POST /api HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n";
 
         with_reader(request_data, |reader| {
-            let (method, _uri, _version) = parse_request_line(reader)?.unwrap();
+            let (method, _uri, _version) = parse_request_line(reader)?.expect("expected request line");
             let headers = parse_headers(reader)?;
             let body = parse_body(reader, &headers)?;
 
@@ -286,7 +286,7 @@ mod tests {
                              {\"key\":\"val\"}";
 
         with_reader(request_data, |reader| {
-            let (method, uri, _version) = parse_request_line(reader)?.unwrap();
+            let (method, uri, _version) = parse_request_line(reader)?.expect("expected request line");
             let headers = parse_headers(reader)?;
             let body = parse_body(reader, &headers)?;
 
@@ -308,7 +308,7 @@ mod tests {
                              \r\n";
 
         with_reader(request_data, |reader| {
-            let (method, uri, _version) = parse_request_line(reader)?.unwrap();
+            let (method, uri, _version) = parse_request_line(reader)?.expect("expected request line");
             let headers = parse_headers(reader)?;
             let body = parse_body(reader, &headers)?;
 
@@ -331,7 +331,7 @@ mod tests {
         request_bytes.extend_from_slice(binary_body);
 
         with_reader(&request_bytes, |reader| {
-            let (method, uri, _version) = parse_request_line(reader)?.unwrap();
+            let (method, uri, _version) = parse_request_line(reader)?.expect("expected request line");
             let headers = parse_headers(reader)?;
             let body = parse_body(reader, &headers)?;
 
@@ -354,7 +354,7 @@ mod tests {
         request_bytes.extend_from_slice(&large_body);
 
         with_reader(&request_bytes, |reader| {
-            let (method, uri, _version) = parse_request_line(reader)?.unwrap();
+            let (method, uri, _version) = parse_request_line(reader)?.expect("expected request line");
             let headers = parse_headers(reader)?;
             let body = parse_body(reader, &headers)?;
 

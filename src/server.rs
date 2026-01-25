@@ -137,6 +137,15 @@ impl Server {
 
     fn handle_connection(mut stream: TcpStream, router: Router) {
         if let Err(e) = Self::process_requests(&mut stream, router) {
+            // Timeout errors are expected for idle persistent connections
+            if let Some(io_err) = e.root_cause().downcast_ref::<std::io::Error>() {
+                if io_err.kind() == std::io::ErrorKind::WouldBlock
+                    || io_err.kind() == std::io::ErrorKind::TimedOut
+                {
+                    log::debug!("Connection closed due to timeout");
+                    return;
+                }
+            }
             log::error!("Error handling connection: {}", e);
         }
     }
@@ -149,10 +158,14 @@ impl Server {
                 stream
                     .write_all(&response.to_bytes())
                     .context("Failed to write response")?;
+
+                let no_persistent_connections = request.http_version == "HTTP/1.0";
                 if let Some(connection_header) = request.headers.get("connection") {
-                    if connection_header == "close" {
+                    if connection_header.eq_ignore_ascii_case("close") {
                         break;
                     }
+                } else if no_persistent_connections {
+                    break;
                 }
             } else {
                 break;
