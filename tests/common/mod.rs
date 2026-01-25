@@ -1,5 +1,5 @@
 // Integration test utilities
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::thread;
 use std::time::Duration;
@@ -71,16 +71,10 @@ impl TestServer {
         self.server.addr().to_string()
     }
 
-    /// Send a raw HTTP request and receive the response as bytes
+    /// Send a raw HTTP request and receive the response as bytes.
+    /// Reads until connection closes (use Connection: close header).
     pub fn send_request_bytes(&self, request: &str) -> Vec<u8> {
-        let mut stream =
-            TcpStream::connect(self.server.addr()).expect("Failed to connect to test server");
-        stream
-            .set_read_timeout(Some(SOCKET_TIMEOUT))
-            .expect("Failed to set read timeout");
-        stream
-            .set_write_timeout(Some(SOCKET_TIMEOUT))
-            .expect("Failed to set write timeout");
+        let mut stream = self.connect();
 
         stream
             .write_all(request.as_bytes())
@@ -107,7 +101,85 @@ impl TestServer {
 
     /// Send a raw HTTP request and receive the response as a string
     pub fn send_request(&self, request: &str) -> String {
-        let bytes = self.send_request_bytes(request);
-        String::from_utf8_lossy(&bytes).to_string()
+        self.send_requests(&[request]).join("\n")
+    }
+
+    /// Send multiple HTTP requests over a single persistent connection.
+    /// Returns a response for each request. The last request should include
+    /// `Connection: close` to properly terminate the connection.
+    pub fn send_requests(&self, requests: &[&str]) -> Vec<String> {
+        let stream = self.connect();
+        let mut reader = BufReader::new(stream);
+
+        let mut responses = Vec::with_capacity(requests.len());
+
+        for request in requests {
+            reader
+                .get_mut()
+                .write_all(request.as_bytes())
+                .expect("Failed to write request");
+
+            let response = Self::read_single_response(&mut reader);
+            responses.push(response);
+        }
+
+        responses
+    }
+
+    fn connect(&self) -> TcpStream {
+        let stream =
+            TcpStream::connect(self.server.addr()).expect("Failed to connect to test server");
+        stream
+            .set_read_timeout(Some(SOCKET_TIMEOUT))
+            .expect("Failed to set read timeout");
+        stream
+            .set_write_timeout(Some(SOCKET_TIMEOUT))
+            .expect("Failed to set write timeout");
+        stream
+    }
+
+    /// Read a single HTTP response by parsing headers for Content-Length
+    fn read_single_response<R: BufRead>(reader: &mut R) -> String {
+        // Read status line (e.g., "HTTP/1.1 200 OK\r\n")
+        let mut status_line = String::new();
+        reader
+            .read_line(&mut status_line)
+            .expect("Failed to read status line");
+
+        // Read headers until empty line
+        let mut headers = String::new();
+        let mut content_length: usize = 0;
+        loop {
+            let mut line = String::new();
+            reader
+                .read_line(&mut line)
+                .expect("Failed to read header line");
+            if line == "\r\n" {
+                break;
+            }
+            if line.to_lowercase().starts_with("content-length:") {
+                content_length = line
+                    .split(':')
+                    .nth(1)
+                    .unwrap()
+                    .trim()
+                    .parse()
+                    .expect("Invalid Content-Length");
+            }
+            headers.push_str(&line);
+        }
+
+        // Read body based on Content-Length
+        let mut body = vec![0u8; content_length];
+        if content_length > 0 {
+            reader.read_exact(&mut body).expect("Failed to read body");
+        }
+
+        format!(
+            "{}{}\r\n{}",
+            status_line,
+            headers,
+            String::from_utf8_lossy(&body)
+        )
     }
 }

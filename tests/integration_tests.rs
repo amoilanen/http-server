@@ -157,6 +157,24 @@ fn test_multiple_sequential_requests() {
 }
 
 #[test]
+fn test_persistent_connections() {
+    let server = TestServer::start(None);
+
+    let responses = server.send_requests(&[
+        "GET /echo/banana HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        "GET /user-agent HTTP/1.1\r\nHost: localhost\r\nUser-Agent: blueberry/apple-blueberry\r\nConnection: close\r\n\r\n",
+    ]);
+
+    assert_eq!(responses.len(), 2);
+
+    assert!(responses[0].starts_with("HTTP/1.1 200 OK"), "First response should be 200 OK. Got: {}", responses[0]);
+    assert!(responses[0].contains("banana"), "First response should contain 'banana'. Got: {}", responses[0]);
+
+    assert!(responses[1].starts_with("HTTP/1.1 200 OK"), "Second response should be 200 OK. Got: {}", responses[1]);
+    assert!(responses[1].contains("blueberry/apple-blueberry"), "Second response should contain user-agent. Got: {}", responses[1]);
+}
+
+#[test]
 fn test_http_response_format() {
     let server = TestServer::start(None);
 
