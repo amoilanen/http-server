@@ -19,6 +19,8 @@ const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_millis(50);
 /// How often to poll for new connections in non-blocking accept loop.
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
+const PERSISTENT_CONNECTION_READ_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// A running HTTP server that can be gracefully shut down.
 pub struct Server {
     /// The address the server is bound to
@@ -134,17 +136,29 @@ impl Server {
     }
 
     fn handle_connection(mut stream: TcpStream, router: Router) {
-        match parse_request(&mut stream) {
-            Ok(request) => {
-                let response = router.handle(request);
-                if let Err(e) = stream.write_all(&response.to_bytes()) {
-                    log::error!("Error writing response: {}", e);
+        if let Err(e) = Self::process_requests(&mut stream, router) {
+            log::error!("Error handling connection: {}", e);
+        }
+    }
+
+    fn process_requests(stream: &mut TcpStream, router: Router) -> Result<()> {
+        stream.set_read_timeout(Some(PERSISTENT_CONNECTION_READ_TIMEOUT))?;
+        loop {
+            if let Some(request) = parse_request(stream).context("Failed to parse request")? {
+                let response = router.handle(&request);
+                stream
+                    .write_all(&response.to_bytes())
+                    .context("Failed to write response")?;
+                if let Some(connection_header) = request.headers.get("connection") {
+                    if connection_header == "close" {
+                        break;
+                    }
                 }
-            }
-            Err(e) => {
-                log::error!("Error parsing request: {}", e);
+            } else {
+                break;
             }
         }
+        Ok(())
     }
 }
 

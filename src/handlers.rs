@@ -22,7 +22,7 @@ impl Router {
     }
 
     /// Route a request to the appropriate handler
-    pub fn handle(&self, request: HttpRequest) -> HttpResponse {
+    pub fn handle(&self, request: &HttpRequest) -> HttpResponse {
         let uri = &request.uri;
 
         if uri == "/" {
@@ -57,7 +57,7 @@ mod tests {
             Vec::new(),
         );
         
-        let response = router.handle(request);
+        let response = router.handle(&request);
         assert_eq!(response.status, 200);
     }
 
@@ -74,7 +74,7 @@ mod tests {
             Vec::new(),
         );
         
-        let response = router.handle(request);
+        let response = router.handle(&request);
         assert_eq!(response.status, 404);
     }
 }

@@ -5,12 +5,12 @@ use anyhow::{anyhow, Result};
 use crate::http::types::{HttpMethod, HttpRequest, HttpHeaders};
 
 /// Parse a single HTTP request line
-fn parse_request_line<R: BufRead>(reader: &mut R) -> Result<(HttpMethod, String, String)> {
+fn parse_request_line<R: BufRead>(reader: &mut R) -> Result<Option<(HttpMethod, String, String)>> {
     let mut line = String::new();
     reader.read_line(&mut line)?;
     let parts: Vec<&str> = line.split_whitespace().collect();
     if parts.is_empty() {
-        return Err(anyhow!("Empty HTTP request line"));
+        return Ok(None);
     }
     if parts.len() < 2 {
         return Err(anyhow!("Missing URI in HTTP request line: '{}'", line));
@@ -32,7 +32,7 @@ fn parse_request_line<R: BufRead>(reader: &mut R) -> Result<(HttpMethod, String,
         return Err(anyhow!("Empty HTTP version in HTTP request line: '{}'", line));
     }
 
-    Ok((method, uri, http_version))
+    Ok(Some((method, uri, http_version)))
 }
 
 /// Parse HTTP headers from a buffered reader
@@ -84,12 +84,15 @@ fn get_content_length(headers: &HttpHeaders) -> Result<Option<usize>> {
 }
 
 /// Parse a complete HTTP request from a TCP stream
-pub fn parse_request(stream: &mut TcpStream) -> Result<HttpRequest> {
+pub fn parse_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>> {
     let mut reader = BufReader::new(stream);
-    let (method, uri, http_version) = parse_request_line(&mut reader)?;
-    let headers = parse_headers(&mut reader)?;
-    let body = parse_body(&mut reader, &headers)?;
-    Ok(HttpRequest::new(method, uri, http_version, headers, body))
+    if let Some((method, uri, http_version)) = parse_request_line(&mut reader)? {
+        let headers = parse_headers(&mut reader)?;
+        let body = parse_body(&mut reader, &headers)?;
+        Ok(Some(HttpRequest::new(method, uri, http_version, headers, body)))
+    } else {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -108,7 +111,7 @@ mod tests {
     #[test]
     fn test_parse_request_line_valid() -> Result<()> {
         with_reader(b"GET /index.html HTTP/1.1\r\n", |reader| {
-            let (method, uri, version) = parse_request_line(reader)?;
+            let (method, uri, version) = parse_request_line(reader)?.unwrap();
             assert_eq!(method, HttpMethod::Get);
             assert_eq!(uri, "/index.html");
             assert_eq!(version, "HTTP/1.1");
@@ -119,7 +122,7 @@ mod tests {
     #[test]
     fn test_parse_request_line_post() -> Result<()> {
         with_reader(b"POST /api HTTP/1.1\r\n", |reader| {
-            let (method, uri, version) = parse_request_line(reader)?;
+            let (method, uri, version) = parse_request_line(reader)?.unwrap();
             assert_eq!(method, HttpMethod::Post);
             assert_eq!(uri, "/api");
             assert_eq!(version, "HTTP/1.1");
@@ -148,9 +151,8 @@ mod tests {
     #[test]
     fn test_parse_request_line_empty() -> Result<()> {
         with_reader(b"", |reader| {
-            let result = parse_request_line(reader);
-            assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("Empty HTTP request line"));
+            let result = parse_request_line(reader)?;
+            assert!(result.is_none());
             Ok(())
         })
     }
@@ -203,7 +205,7 @@ mod tests {
         let request_data = b"GET /path HTTP/1.1\r\nHost: example.com\r\n\r\n";
 
         with_reader(request_data, |reader| {
-            let (method, uri, version) = parse_request_line(reader)?;
+            let (method, uri, version) = parse_request_line(reader)?.unwrap();
             let headers = parse_headers(reader)?;
             let body = parse_body(reader, &headers)?;
 
@@ -228,7 +230,7 @@ mod tests {
         request_bytes.extend_from_slice(body_content);
 
         with_reader(&request_bytes, |reader| {
-            let (method, uri, _version) = parse_request_line(reader)?;
+            let (method, uri, _version) = parse_request_line(reader)?.unwrap();
             let headers = parse_headers(reader)?;
             let body = parse_body(reader, &headers)?;
 
@@ -246,7 +248,7 @@ mod tests {
         let request_data = b"GET /index HTTP/1.1\r\nHost: example.com\r\nUser-Agent: test-client\r\n\r\n";
 
         with_reader(request_data, |reader| {
-            let (method, _uri, _version) = parse_request_line(reader)?;
+            let (method, _uri, _version) = parse_request_line(reader)?.unwrap();
             let headers = parse_headers(reader)?;
             let body = parse_body(reader, &headers)?;
 
@@ -261,7 +263,7 @@ mod tests {
         let request_data = b"POST /api HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n";
 
         with_reader(request_data, |reader| {
-            let (method, _uri, _version) = parse_request_line(reader)?;
+            let (method, _uri, _version) = parse_request_line(reader)?.unwrap();
             let headers = parse_headers(reader)?;
             let body = parse_body(reader, &headers)?;
 
@@ -284,7 +286,7 @@ mod tests {
                              {\"key\":\"val\"}";
 
         with_reader(request_data, |reader| {
-            let (method, uri, _version) = parse_request_line(reader)?;
+            let (method, uri, _version) = parse_request_line(reader)?.unwrap();
             let headers = parse_headers(reader)?;
             let body = parse_body(reader, &headers)?;
 
@@ -306,7 +308,7 @@ mod tests {
                              \r\n";
 
         with_reader(request_data, |reader| {
-            let (method, uri, _version) = parse_request_line(reader)?;
+            let (method, uri, _version) = parse_request_line(reader)?.unwrap();
             let headers = parse_headers(reader)?;
             let body = parse_body(reader, &headers)?;
 
@@ -329,7 +331,7 @@ mod tests {
         request_bytes.extend_from_slice(binary_body);
 
         with_reader(&request_bytes, |reader| {
-            let (method, uri, _version) = parse_request_line(reader)?;
+            let (method, uri, _version) = parse_request_line(reader)?.unwrap();
             let headers = parse_headers(reader)?;
             let body = parse_body(reader, &headers)?;
 
@@ -352,7 +354,7 @@ mod tests {
         request_bytes.extend_from_slice(&large_body);
 
         with_reader(&request_bytes, |reader| {
-            let (method, uri, _version) = parse_request_line(reader)?;
+            let (method, uri, _version) = parse_request_line(reader)?.unwrap();
             let headers = parse_headers(reader)?;
             let body = parse_body(reader, &headers)?;
 
