@@ -1,87 +1,113 @@
 // Integration test utilities
-use std::net::TcpListener;
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::thread;
 use std::time::Duration;
 
-/// Find an available port for testing
-#[allow(dead_code)]
-pub fn find_free_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind to port 0");
-    let addr = listener.local_addr().expect("Failed to get local address");
-    addr.port()
-}
+use codecrafters_http_server::{Server, ServerConfig};
 
-/// Wait for a port to become available
-#[allow(dead_code)]
-pub fn wait_for_port(port: u16, timeout_secs: u64) -> bool {
+/// How long to wait for the server port to become available.
+const PORT_READY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How often to check if the port is available.
+const PORT_CHECK_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Timeout for socket read/write operations.
+const SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Buffer size for reading HTTP responses.
+const READ_BUFFER_SIZE: usize = 4096;
+
+/// How long to wait before retrying on WouldBlock.
+const WOULD_BLOCK_RETRY_INTERVAL: Duration = Duration::from_millis(10);
+
+/// Wait for a port to become available within timeout
+fn wait_for_port(port: u16) -> bool {
     let start = std::time::Instant::now();
     loop {
-        match std::net::TcpStream::connect(format!("127.0.0.1:{}", port)) {
+        match TcpStream::connect(format!("127.0.0.1:{}", port)) {
             Ok(_) => return true,
             Err(_) => {
-                if start.elapsed() > Duration::from_secs(timeout_secs) {
+                if start.elapsed() > PORT_READY_TIMEOUT {
                     return false;
                 }
-                thread::sleep(Duration::from_millis(50));
+                thread::sleep(PORT_CHECK_INTERVAL);
             }
         }
     }
 }
 
-/// Start a test server in a background thread
-#[allow(dead_code)]
+/// Test server that wraps the real Server for integration testing.
+/// Provides convenience methods for sending test requests.
 pub struct TestServer {
-    port: u16,
-    thread_handle: Option<std::thread::JoinHandle<()>>,
+    server: Server,
 }
 
-#[allow(dead_code)]
 impl TestServer {
-    pub fn new(directory: Option<String>) -> Self {
-        let port = find_free_port();
-        
-        let thread_handle = thread::spawn(move || {
-            let config = codecrafters_http_server::ServerConfig::new(directory);
-            let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
-                .expect("Failed to bind to test port");
-            
-            // Only accept a few connections for testing
-            for stream in listener.incoming().take(10) {
-                if let Ok(mut tcp_stream) = stream {
-                    let router = codecrafters_http_server::Router::new(config.clone());
-                    
-                    if let Ok(request) = codecrafters_http_server::http::parse_request(&mut tcp_stream) {
-                        let response = router.handle(request);
-                        let _ = std::io::Write::write_all(&mut tcp_stream, &response.to_bytes());
-                    }
+    /// Create and start a new test server with optional file directory
+    pub fn start(directory: Option<String>) -> Self {
+        let config = ServerConfig::new(directory);
+        let server =
+            Server::start_with_dynamic_port(config).expect("Failed to start test server");
+
+        // Wait for server to be ready
+        wait_for_port(server.port());
+
+        TestServer { server }
+    }
+
+    /// Get the server URL for making requests
+    pub fn url(&self) -> String {
+        format!("http://{}", self.server.addr())
+    }
+
+    /// Get the server port number
+    pub fn port(&self) -> u16 {
+        self.server.port()
+    }
+
+    /// Get the server address as "127.0.0.1:port"
+    pub fn addr(&self) -> String {
+        self.server.addr().to_string()
+    }
+
+    /// Send a raw HTTP request and receive the response as bytes
+    pub fn send_request_bytes(&self, request: &str) -> Vec<u8> {
+        let mut stream =
+            TcpStream::connect(self.server.addr()).expect("Failed to connect to test server");
+        stream
+            .set_read_timeout(Some(SOCKET_TIMEOUT))
+            .expect("Failed to set read timeout");
+        stream
+            .set_write_timeout(Some(SOCKET_TIMEOUT))
+            .expect("Failed to set write timeout");
+
+        stream
+            .write_all(request.as_bytes())
+            .expect("Failed to write request");
+
+        let mut response = Vec::new();
+        let mut buffer = [0; READ_BUFFER_SIZE];
+        loop {
+            match stream.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(n) => response.extend_from_slice(&buffer[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(WOULD_BLOCK_RETRY_INTERVAL);
+                }
+                Err(e) => {
+                    eprintln!("Read error: {}", e);
+                    break;
                 }
             }
-        });
-        
-        // Wait for port to be available
-        wait_for_port(port, 5);
-        
-        TestServer {
-            port,
-            thread_handle: Some(thread_handle),
         }
+
+        response
     }
 
-    pub fn url(&self) -> String {
-        format!("http://127.0.0.1:{}", self.port)
-    }
-
-    pub fn port(&self) -> u16 {
-        self.port
+    /// Send a raw HTTP request and receive the response as a string
+    pub fn send_request(&self, request: &str) -> String {
+        let bytes = self.send_request_bytes(request);
+        String::from_utf8_lossy(&bytes).to_string()
     }
 }
-
-impl Drop for TestServer {
-    fn drop(&mut self) {
-        // Server thread will exit when listener is dropped
-        if let Some(handle) = self.thread_handle.take() {
-            let _ = handle.join();
-        }
-    }
-}
-
